@@ -1,30 +1,48 @@
 package cn.coderise.ignition.websocket.gateway.config;
 
-import com.inductiveautomation.ignition.gateway.config.PersistentResourceConfig;
-import com.inductiveautomation.ignition.gateway.config.ResourceConfigMeta;
-
 /**
- * WebSocket module settings.
+ * WebSocket module settings (simplified).
  */
-public record WebSocketSettings(
-    int port,
-    int maxConnections,
-    int sessionTimeoutMinutes,
-    boolean requireAuthentication,
-    String allowedOrigins
-) implements PersistentResourceConfig {
+public class WebSocketSettings {
 
-    public static final WebSocketSettings DEFAULT = new WebSocketSettings(
-        8088,        // port (same as Gateway HTTP port)
-        100,         // maxConnections
-        30,          // sessionTimeoutMinutes
-        true,        // requireAuthentication
-        "*"          // allowedOrigins (all origins for development)
-    );
+    public static final int DEFAULT_MAX_CONNECTIONS = 100;
+    public static final int DEFAULT_TIMEOUT_MINUTES = 30;
+    public static final boolean DEFAULT_REQUIRE_AUTH = true;
 
-    public static final ResourceConfigMeta<WebSocketSettings> META = ResourceConfigMeta.newBuilder(WebSocketSettings.class)
-        .typeId("cn.coderise.ignition.websocket.settings")
-        .name("WebSocketSettings")
-        .description("WebSocket Module Configuration")
-        .build();
+    private int maxConnections = DEFAULT_MAX_CONNECTIONS;
+    private int sessionTimeoutMinutes = DEFAULT_TIMEOUT_MINUTES;
+    private boolean requireAuthentication = DEFAULT_REQUIRE_AUTH;
+    private String allowedOrigins = "*";
+
+    public int getMaxConnections() {
+        return maxConnections;
+    }
+
+    public void setMaxConnections(int maxConnections) {
+        this.maxConnections = maxConnections;
+    }
+
+    public int getSessionTimeoutMinutes() {
+        return sessionTimeoutMinutes;
+    }
+
+    public void setSessionTimeoutMinutes(int sessionTimeoutMinutes) {
+        this.sessionTimeoutMinutes = sessionTimeoutMinutes;
+    }
+
+    public boolean isRequireAuthentication() {
+        return requireAuthentication;
+    }
+
+    public void setRequireAuthentication(boolean requireAuthentication) {
+        this.requireAuthentication = requireAuthentication;
+    }
+
+    public String getAllowedOrigins() {
+        return allowedOrigins;
+    }
+
+    public void setAllowedOrigins(String allowedOrigins) {
+        this.allowedOrigins = allowedOrigins;
+    }
 }

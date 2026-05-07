@@ -1,43 +1,38 @@
 package cn.coderise.ignition.websocket.gateway.ws;
 
+import java.io.BufferedReader;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.eclipse.jetty.websocket.api.Session;
-import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
-import org.eclipse.jetty.websocket.api.annotations.OnWebSocketConnect;
-import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
-import org.eclipse.jetty.websocket.api.annotations.WebSocket;
-
+import com.inductiveautomation.ignition.common.gson.Gson;
+import com.inductiveautomation.ignition.common.gson.JsonObject;
 import com.inductiveautomation.ignition.common.util.LoggerEx;
+import com.inductiveautomation.ignition.gateway.dataroutes.HttpMethod;
+import com.inductiveautomation.ignition.gateway.dataroutes.RequestContext;
+import com.inductiveautomation.ignition.gateway.dataroutes.RouteGroup;
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
 
-import cn.coderise.ignition.websocket.gateway.config.WebSocketSettings;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 
 /**
  * WebSocket Endpoint for real-time device control.
  *
  * Handles:
- * - Client connections
+ * - Client connections via REST API
  * - Control commands from mobile frontend
  * - Tag change broadcasts to all connected clients
  */
-@WebSocket
 public class WebSocketEndpoint {
 
     private static final LoggerEx log = LoggerEx.newBuilder().build("websocket.gateway.ws.WebSocketEndpoint");
+    private static final Gson GSON = new Gson();
 
-    // All active WebSocket connections
-    private static final Set<Session> connections = ConcurrentHashMap.newKeySet();
+    // All active sessions
+    private static final Set<String> sessions = ConcurrentHashMap.newKeySet();
 
     // Gateway context for Tag access
     private static volatile GatewayContext gatewayContext;
-
-    // Current settings
-    private static volatile WebSocketSettings settings = WebSocketSettings.DEFAULT;
-
-    // Current session (for this endpoint instance)
-    private Session session;
 
     /**
      * Initialize the WebSocket endpoint.
@@ -51,109 +46,121 @@ public class WebSocketEndpoint {
      * Shutdown the WebSocket endpoint.
      */
     public static void shutdown() {
-        // Close all connections
-        for (Session s : connections) {
-            try {
-                s.close();
-            } catch (Exception e) {
-                log.debugf("Error closing session: %s", e.getMessage());
-            }
-        }
-        connections.clear();
+        sessions.clear();
         log.info("WebSocket endpoint shutdown.");
     }
 
     /**
-     * Apply new settings.
+     * Mount REST routes for WebSocket-like communication.
      */
-    public static void applySettings(WebSocketSettings newSettings) {
-        settings = newSettings;
-        log.infof("Applied settings: maxConnections=%d, requireAuth=%s",
-            newSettings.maxConnections(),
-            newSettings.requireAuthentication());
-    }
+    public static void mountRoutes(RouteGroup routes, GatewayContext context) {
+        // POST /command - Send control command
+        routes.newRoute("/command")
+            .type(RouteGroup.TYPE_JSON)
+            .method(HttpMethod.POST)
+            .handler(WebSocketEndpoint::handleCommand)
+            .mount();
 
-    @OnWebSocketConnect
-    public void onOpen(Session session) {
-        this.session = session;
+        // GET /status - Get current device status
+        routes.newRoute("/status")
+            .type(RouteGroup.TYPE_JSON)
+            .method(HttpMethod.GET)
+            .handler(WebSocketEndpoint::getStatus)
+            .mount();
 
-        // Check connection limit
-        if (connections.size() >= settings.maxConnections()) {
-            log.warn("Max connections reached, rejecting new connection.");
-            session.close(1008, "Max connections reached");
-            return;
-        }
+        // GET /connections - Get connection count
+        routes.newRoute("/connections")
+            .type(RouteGroup.TYPE_JSON)
+            .method(HttpMethod.GET)
+            .handler(WebSocketEndpoint::getConnections)
+            .mount();
 
-        // TODO: Authentication check
-        // if (settings.requireAuthentication()) {
-        //     String token = session.getUpgradeRequest().getParameter("token");
-        //     if (!validateToken(token)) {
-        //         session.close(1008, "Unauthorized");
-        //         return;
-        //     }
-        // }
-
-        connections.add(session);
-        log.infof("WebSocket connected: %s (total: %d)", session.getRemoteAddress(), connections.size());
-
-        // Send initial status
-        sendTo(session, "{\"type\":\"connected\",\"message\":\"Welcome to Ignition WebSocket\"}");
-    }
-
-    @OnWebSocketMessage
-    public void onMessage(Session session, String message) {
-        log.debugf("Received message: %s", message);
-
-        try {
-            // TODO: Call Jython handler
-            // Object result = JythonBridge.invokeHandler("onMessage", session, message);
-
-            // For now, just echo back
-            String response = processMessage(message);
-            sendTo(session, response);
-        } catch (Exception e) {
-            log.errorf("Error processing message: %s", e.getMessage());
-            sendTo(session, "{\"type\":\"error\",\"message\":\"" + e.getMessage() + "\"}");
-        }
-    }
-
-    @OnWebSocketClose
-    public void onClose(Session session, int statusCode, String reason) {
-        connections.remove(session);
-        log.infof("WebSocket closed: %s (code: %d, reason: %s, remaining: %d)",
-            session.getRemoteAddress(), statusCode, reason, connections.size());
+        log.info("WebSocket routes mounted at /data/ws-module/");
     }
 
     /**
-     * Send message to a specific session.
+     * Handle control command from frontend.
      */
-    private static void sendTo(Session session, String json) {
-        if (session != null && session.isOpen()) {
-            session.getRemote().sendStringByFuture(json);
+    private static Object handleCommand(RequestContext request, HttpServletResponse response) throws Exception {
+        HttpServletRequest req = request.getRequest();
+        String body = readRequestBody(req);
+        log.debugf("Received command: %s", body);
+
+        try {
+            JsonObject cmd = GSON.fromJson(body, JsonObject.class);
+            String deviceId = cmd.get("deviceId").getAsString();
+            String action = cmd.get("action").getAsString();
+
+            // TODO: Call Jython handler
+            JsonObject result = processCommand(deviceId, action);
+            return GSON.toJson(result);
+        } catch (Exception e) {
+            log.errorf("Error processing command: %s", e.getMessage());
+            response.setStatus(400);
+            JsonObject error = new JsonObject();
+            error.addProperty("type", "error");
+            error.addProperty("message", e.getMessage());
+            return GSON.toJson(error);
         }
+    }
+
+    /**
+     * Get current device status.
+     */
+    private static Object getStatus(RequestContext request, HttpServletResponse response) throws Exception {
+        JsonObject status = new JsonObject();
+        status.addProperty("type", "status");
+        status.addProperty("message", "Status endpoint ready");
+        status.addProperty("connectionCount", sessions.size());
+        return GSON.toJson(status);
+    }
+
+    /**
+     * Get connection count.
+     */
+    private static Object getConnections(RequestContext request, HttpServletResponse response) throws Exception {
+        JsonObject result = new JsonObject();
+        result.addProperty("count", sessions.size());
+        return GSON.toJson(result);
+    }
+
+    /**
+     * Read request body as string.
+     */
+    private static String readRequestBody(HttpServletRequest request) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        BufferedReader reader = request.getReader();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            sb.append(line);
+        }
+        return sb.toString();
     }
 
     /**
      * Broadcast message to all connected sessions.
      */
-    public static void broadcast(String json) {
-        for (Session s : connections) {
-            sendTo(s, json);
-        }
+    public static void broadcast(String eventType, JsonObject data) {
+        log.debugf("Broadcasting to %d sessions: %s", sessions.size(), eventType);
     }
 
     /**
-     * Process incoming message (placeholder for Jython integration).
+     * Process incoming command (placeholder for Jython integration).
      */
-    private String processMessage(String message) {
-        // TODO: Implement Jython call
-        return "{\"type\":\"echo\",\"message\":\"" + message + "\"}";
+    private static JsonObject processCommand(String deviceId, String action) {
+        JsonObject result = new JsonObject();
+        result.addProperty("type", "command_result");
+        result.addProperty("deviceId", deviceId);
+        result.addProperty("action", action);
+        result.addProperty("success", true);
+        result.addProperty("message", "Command processed (Jython integration pending)");
+        return result;
     }
 
     /**
      * Get current connection count.
      */
     public static int getConnectionCount() {
-        return connections.size();
+        return sessions.size();
     }
 }
