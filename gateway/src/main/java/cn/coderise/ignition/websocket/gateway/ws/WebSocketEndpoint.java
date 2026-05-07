@@ -12,6 +12,8 @@ import com.inductiveautomation.ignition.gateway.dataroutes.RequestContext;
 import com.inductiveautomation.ignition.gateway.dataroutes.RouteGroup;
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
 
+import cn.coderise.ignition.websocket.gateway.jython.JythonBridge;
+
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
@@ -20,7 +22,7 @@ import javax.servlet.http.HttpServletResponse;
  *
  * Handles:
  * - Client connections via REST API
- * - Control commands from mobile frontend
+ * - Control commands from mobile frontend (via Jython)
  * - Tag change broadcasts to all connected clients
  */
 public class WebSocketEndpoint {
@@ -39,6 +41,10 @@ public class WebSocketEndpoint {
      */
     public static void startup(GatewayContext context) {
         gatewayContext = context;
+
+        // Initialize Jython bridge
+        JythonBridge.initialize();
+
         log.info("WebSocket endpoint initialized.");
     }
 
@@ -47,6 +53,10 @@ public class WebSocketEndpoint {
      */
     public static void shutdown() {
         sessions.clear();
+
+        // Shutdown Jython bridge
+        JythonBridge.shutdown();
+
         log.info("WebSocket endpoint shutdown.");
     }
 
@@ -75,6 +85,13 @@ public class WebSocketEndpoint {
             .handler(WebSocketEndpoint::getConnections)
             .mount();
 
+        // GET /init - Get initial status (calls Jython onConnect)
+        routes.newRoute("/init")
+            .type(RouteGroup.TYPE_JSON)
+            .method(HttpMethod.GET)
+            .handler(WebSocketEndpoint::getInit)
+            .mount();
+
         log.info("WebSocket routes mounted at /data/ws-module/");
     }
 
@@ -91,8 +108,12 @@ public class WebSocketEndpoint {
             String deviceId = cmd.get("deviceId").getAsString();
             String action = cmd.get("action").getAsString();
 
-            // TODO: Call Jython handler
-            JsonObject result = processCommand(deviceId, action);
+            // Call Jython handler
+            Object result = JythonBridge.processCommand(deviceId, action);
+
+            if (result instanceof String) {
+                return result;
+            }
             return GSON.toJson(result);
         } catch (Exception e) {
             log.errorf("Error processing command: %s", e.getMessage());
@@ -113,6 +134,17 @@ public class WebSocketEndpoint {
         status.addProperty("message", "Status endpoint ready");
         status.addProperty("connectionCount", sessions.size());
         return GSON.toJson(status);
+    }
+
+    /**
+     * Get initial status (calls Jython onConnect).
+     */
+    private static Object getInit(RequestContext request, HttpServletResponse response) throws Exception {
+        Object result = JythonBridge.getInitialStatus();
+        if (result instanceof String) {
+            return result;
+        }
+        return GSON.toJson(result);
     }
 
     /**
@@ -145,16 +177,18 @@ public class WebSocketEndpoint {
     }
 
     /**
-     * Process incoming command (placeholder for Jython integration).
+     * Handle Tag change event (called by TagChangeListener).
      */
-    private static JsonObject processCommand(String deviceId, String action) {
-        JsonObject result = new JsonObject();
-        result.addProperty("type", "command_result");
-        result.addProperty("deviceId", deviceId);
-        result.addProperty("action", action);
-        result.addProperty("success", true);
-        result.addProperty("message", "Command processed (Jython integration pending)");
-        return result;
+    public static void onTagChanged(String tagPath, Object newValue) {
+        Object result = JythonBridge.processTagChange(tagPath, newValue);
+        if (result != null) {
+            // Broadcast to all connected clients
+            if (result instanceof String) {
+                broadcast("status", GSON.fromJson((String) result, JsonObject.class));
+            } else {
+                broadcast("status", GSON.toJsonTree(result).getAsJsonObject());
+            }
+        }
     }
 
     /**

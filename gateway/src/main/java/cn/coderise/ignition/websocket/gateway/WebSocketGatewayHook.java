@@ -10,6 +10,7 @@ import com.inductiveautomation.ignition.gateway.model.AbstractGatewayModuleHook;
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
 
 import cn.coderise.ignition.websocket.WebSocketModule;
+import cn.coderise.ignition.websocket.gateway.tags.SmartControlTagListener;
 import cn.coderise.ignition.websocket.gateway.ws.WebSocketEndpoint;
 
 /**
@@ -45,12 +46,18 @@ public class WebSocketGatewayHook extends AbstractGatewayModuleHook {
         // Initialize WebSocket endpoint
         WebSocketEndpoint.startup(gatewayContext);
 
+        // Initialize Tag change listener
+        SmartControlTagListener.initialize(gatewayContext);
+
         log.info("Ignition WebSocket Module started successfully.");
     }
 
     @Override
     public void shutdown() {
         log.info("Shutting down Ignition WebSocket module.");
+
+        // Shutdown Tag listener
+        SmartControlTagListener.shutdown();
 
         // Shutdown WebSocket endpoint
         WebSocketEndpoint.shutdown();
@@ -61,7 +68,6 @@ public class WebSocketGatewayHook extends AbstractGatewayModuleHook {
     @Override
     public void mountRouteHandlers(RouteGroup routeGroup) {
         log.info("Mounting WebSocket API routes.");
-        // WebSocket endpoint is registered via Jetty ServletContextHandler
         WebSocketEndpoint.mountRoutes(routeGroup, gatewayContext);
     }
 
